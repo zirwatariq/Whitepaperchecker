@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Whitepaper Checker</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>Whitepaper Checker</h1>
+      <p class="subtitle">Validate your PDF design against the source Word document</p>
+    </header>
+
+    <main>
+      <section class="upload-section">
+        <div class="upload-card" id="word-drop">
+          <div class="upload-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+          </div>
+          <h3>Source Document</h3>
+          <p class="upload-hint">Word file (.docx)</p>
+          <label class="upload-label">
+            <input type="file" id="word-input" accept=".docx" hidden />
+            <span class="btn-outline">Choose file</span>
+          </label>
+          <p class="file-name" id="word-filename">No file selected</p>
+        </div>
+
+        <div class="arrow">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M13 7l5 5m0 0l-5 5m5-5H6"/>
+          </svg>
+        </div>
+
+        <div class="upload-card" id="pdf-drop">
+          <div class="upload-icon pdf">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+              <path d="M12 3v6h6"/>
+            </svg>
+          </div>
+          <h3>Design File</h3>
+          <p class="upload-hint">PDF file (.pdf)</p>
+          <label class="upload-label">
+            <input type="file" id="pdf-input" accept=".pdf" hidden />
+            <span class="btn-outline">Choose file</span>
+          </label>
+          <p class="file-name" id="pdf-filename">No file selected</p>
+        </div>
+      </section>
+
+      <div class="action-row">
+        <button class="btn-check" id="check-btn" disabled>
+          <span id="btn-text">Run Checks</span>
+          <span id="btn-spinner" class="spinner hidden"></span>
+        </button>
+      </div>
+
+      <section class="results-section hidden" id="results">
+        <h2>Results</h2>
+        <div class="summary-bar" id="summary-bar"></div>
+        <div class="checks-list" id="checks-list"></div>
+      </section>
+
+      <div class="error-banner hidden" id="error-banner">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="8" x2="12" y2="12"/>
+          <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        <span id="error-text"></span>
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

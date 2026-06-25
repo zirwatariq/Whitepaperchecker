@@ -117,21 +117,29 @@ function buildTocTable(rows) {
 
 function buildPageTable(rows) {
   if (!rows.length) return `<p class="pass-msg">✓ All page numbers are correct.</p>`;
-  const labels = { wrong: "Wrong number", none: "No number found" };
+  const labels = { duplicate: "Duplicate", none: "Not found", missing: "Gap in sequence" };
   const head = `<thead><tr>
-    <th>PDF Page</th>
-    <th>Location</th>
-    <th>Expected</th>
-    <th>Found</th>
     <th>Status</th>
+    <th>PDF Page</th>
+    <th>Number found</th>
+    <th>Location</th>
+    <th>Detail</th>
+    <th>Header / Footer preview</th>
   </tr></thead>`;
-  const body = rows.map(r => `<tr class="row-${esc(r.status)}">
-    <td>${pageRef(r.pdf_page)}</td>
-    <td>${esc(r.location)}</td>
-    <td>${esc(r.expected)}</td>
-    <td><strong>${esc(r.found)}</strong></td>
-    <td>${pill(r.status, labels[r.status] ?? r.status)}</td>
-  </tr>`).join("");
+  const body = rows.map(r => {
+    const preview = r.thumbnail
+      ? `<img src="data:image/png;base64,${r.thumbnail}" style="max-width:220px;border-radius:4px;border:1px solid var(--border);display:block">`
+      : dash();
+    const pgRef = r.pdf_page === "—" ? dash() : pageRef(r.pdf_page);
+    return `<tr class="row-${esc(r.status)}">
+      <td>${pill(r.status, labels[r.status] ?? r.status)}</td>
+      <td>${pgRef}</td>
+      <td><strong>${esc(r.found)}</strong></td>
+      <td>${esc(r.location)}</td>
+      <td class="note-cell">${esc(r.note)}</td>
+      <td class="preview-cell">${preview}</td>
+    </tr>`;
+  }).join("");
   return tableWrap(head + `<tbody>${body}</tbody>`);
 }
 
@@ -209,6 +217,8 @@ const CHECKS = [
     desc: "Page numbers in headers/footers are correct",
     stats: d => [
       { label: "Total pages", value: d.total_pages },
+      { label: "Checked", value: d.checked_pages },
+      { label: "Skipped", value: d.skipped_pages },
       { label: "Issues", value: d.issue_count },
     ],
     table: d => buildPageTable(d.rows || []),

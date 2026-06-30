@@ -115,29 +115,39 @@ function buildTocTable(rows) {
   return tableWrap(head + `<tbody>${body}</tbody>`);
 }
 
+function buildRegionPreview(r) {
+  if (!r.img) return dash();
+  const isTop    = r.region && r.region.startsWith("top");
+  const bandName = isTop ? "HEADER" : "FOOTER";
+  const regionLabel = (r.region || "").replace(/-/g, " ").toUpperCase();
+  return `<div class="band-strip band-active">
+    <div class="band-label">
+      ${bandName}
+      <span class="region-tag">${regionLabel}</span>
+      <span class="band-found-badge">number location</span>
+    </div>
+    <img src="data:image/png;base64,${r.img}" class="band-img">
+  </div>`;
+}
+
 function buildPageTable(rows) {
   if (!rows.length) return `<p class="pass-msg">✓ All page numbers are correct.</p>`;
-  const labels = { duplicate: "Duplicate", none: "Not found", missing: "Gap in sequence" };
+  const labels = { duplicate: "Duplicate", skipped: "Skipped number" };
   const head = `<thead><tr>
     <th>Status</th>
     <th>PDF Page</th>
-    <th>Number found</th>
-    <th>Location</th>
+    <th>Number</th>
     <th>Detail</th>
-    <th>Header / Footer preview</th>
+    <th>Preview (red box = detected region)</th>
   </tr></thead>`;
   const body = rows.map(r => {
-    const preview = r.thumbnail
-      ? `<img src="data:image/png;base64,${r.thumbnail}" style="max-width:220px;border-radius:4px;border:1px solid var(--border);display:block">`
-      : dash();
     const pgRef = r.pdf_page === "—" ? dash() : pageRef(r.pdf_page);
     return `<tr class="row-${esc(r.status)}">
       <td>${pill(r.status, labels[r.status] ?? r.status)}</td>
       <td>${pgRef}</td>
       <td><strong>${esc(r.found)}</strong></td>
-      <td>${esc(r.location)}</td>
       <td class="note-cell">${esc(r.note)}</td>
-      <td class="preview-cell">${preview}</td>
+      <td class="preview-cell">${buildRegionPreview(r)}</td>
     </tr>`;
   }).join("");
   return tableWrap(head + `<tbody>${body}</tbody>`);
@@ -149,16 +159,34 @@ function buildLinkTable(rows) {
     <th>PDF Page</th>
     <th>Type</th>
     <th>Label in PDF</th>
-    <th>Destination</th>
+    <th>URL / Destination</th>
     <th>Issue</th>
+    <th>Note</th>
   </tr></thead>`;
-  const body = rows.map(r => `<tr class="row-wrong">
-    <td>${pageRef(r.pdf_page)}</td>
-    <td>${esc(r.type)}</td>
-    <td><strong>${esc(r.label)}</strong></td>
-    <td style="font-size:.74rem;color:var(--muted)">${esc(r.destination)}</td>
-    <td>${pill("missing", esc(r.issue))}</td>
-  </tr>`).join("");
+  const statusLabels = {
+    "url-not-in-source": "URL not in source",
+    "label-mismatch":    "Label mismatch",
+    "bare-url-label":    "Bare URL label",
+    "empty-label":       "Empty label",
+  };
+  const statusPill = {
+    "url-not-in-source": "missing",
+    "label-mismatch":    "mismatch",
+    "bare-url-label":    "extra",
+    "empty-label":       "missing",
+  };
+  const body = rows.map(r => {
+    const pillClass = statusPill[r.status] || "wrong";
+    const pillLabel = statusLabels[r.status] || r.status;
+    return `<tr class="row-wrong">
+      <td>${pageRef(r.pdf_page)}</td>
+      <td><span style="font-size:.72rem;color:var(--muted)">${esc(r.link_type || "")}</span></td>
+      <td><strong>${esc(r.label)}</strong></td>
+      <td style="font-size:.74rem;color:var(--muted);word-break:break-all">${esc(r.url || "")}</td>
+      <td>${pill(pillClass, pillLabel)}</td>
+      <td class="note-cell">${esc(r.note || "")}</td>
+    </tr>`;
+  }).join("");
   return tableWrap(head + `<tbody>${body}</tbody>`);
 }
 
@@ -216,10 +244,11 @@ const CHECKS = [
     title: "Page Numbers",
     desc: "Page numbers in headers/footers are correct",
     stats: d => [
-      { label: "Total pages", value: d.total_pages },
-      { label: "Checked", value: d.checked_pages },
-      { label: "Skipped", value: d.skipped_pages },
-      { label: "Issues", value: d.issue_count },
+      { label: "Total pages",   value: d.total_pages },
+      { label: "Content pages", value: d.content_pages },
+      { label: "Region",        value: d.region_detected },
+      { label: "Confidence",    value: d.confidence || "—" },
+      { label: "Issues",        value: d.issue_count },
     ],
     table: d => buildPageTable(d.rows || []),
   },
@@ -228,10 +257,11 @@ const CHECKS = [
     title: "Link Labels",
     desc: "All hyperlinks have meaningful labels",
     stats: d => [
-      { label: "Total links", value: d.total_links },
-      { label: "External", value: d.external_links },
-      { label: "Internal", value: d.internal_links },
-      { label: "Issues", value: d.issue_count },
+      { label: "Total links",  value: d.total_links },
+      { label: "Image links",  value: d.image_links },
+      { label: "Text links",   value: d.text_links },
+      { label: "Internal",     value: d.internal_links },
+      { label: "Issues",       value: d.issue_count },
     ],
     table: d => buildLinkTable(d.rows || []),
   },

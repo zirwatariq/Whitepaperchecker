@@ -56,7 +56,7 @@ def check_documents():
             page_result = {"passed": False, "error": str(e)}
 
         try:
-            link_result = check_links(pdf_path)
+            link_result = check_links(pdf_path, word_path)
         except Exception as e:
             link_result = {"passed": False, "error": str(e)}
 

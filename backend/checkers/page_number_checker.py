@@ -1,154 +1,244 @@
+"""
+Page number checker — PDF only.
+
+Step 1  Brute-force 10×20 grid scan on first 5 content pages to find
+        the cell where a standalone 1-3 digit number appears most often.
+Step 2  Extract the page number from that cell on every content page.
+Step 3  Check the collected sequence for duplicates and gaps.
+
+"Not detected" = FAIL, not pass.
+"""
+
 import re
 import base64
 from collections import Counter
 import fitz
 
+# ── Constants ────────────────────────────────────────────────────────────────
 
-def is_toc_page(page):
-    top = page.get_text("text").strip()[:300].lower()
-    if any(kw in top for kw in ["table of contents", "contents"]):
-        return True
-    if len(re.findall(r'\.{4,}', page.get_text("text"))) >= 4:
-        return True
-    return False
+GRID_COLS = 10
+GRID_ROWS = 20
+SCAN_PAGES = 5          # how many content pages to use for region detection
+MIN_HITS   = 2          # minimum appearances to trust a cell as the page-number region
+
+# Matches standalone 1-3 digit numbers, including zero-padded (02, 027)
+_NUM_RE = re.compile(r'^(0*[1-9]\d{0,2})$')
 
 
-def extract_page_number(page, total_pages):
-    """
-    Return (page_number | None, band_name).
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
-    Strategy (most → least reliable):
-      1. The only numeric word in the band that is in range 1..total_pages
-      2. "Page N" / "N of M" text patterns
-      3. A line whose entire content is just a number
-    Never falls back to 'any number in range' to avoid false positives.
-    """
+def _cell_rect(page, col, row):
     r = page.rect
-    ph, pw = r.height, r.width
-    bands = [
-        ("footer", fitz.Rect(0, ph * 0.88, pw, ph)),
-        ("header", fitz.Rect(0, 0, pw, ph * 0.12)),
-    ]
-
-    for band_name, band_rect in bands:
-        # Word-level scan: collect all purely-numeric tokens in range
-        words = page.get_text("words", clip=band_rect)
-        in_range = [int(w[4]) for w in words
-                    if re.fullmatch(r'\d{1,4}', w[4]) and 1 <= int(w[4]) <= total_pages]
-
-        if len(in_range) == 1:
-            # Only one candidate in band — very likely the page number
-            return in_range[0], band_name
-
-        # Multiple candidates: look for explicit patterns
-        text = page.get_text("text", clip=band_rect)
-        for pat in [r'[Pp]age\s+(\d{1,4})', r'\b(\d{1,4})\s+of\s+\d+']:
-            m = re.search(pat, text)
-            if m:
-                n = int(m.group(1))
-                if 1 <= n <= total_pages:
-                    return n, band_name
-
-        # Single-number line
-        for line in text.splitlines():
-            line = line.strip()
-            if re.fullmatch(r'\d{1,4}', line):
-                n = int(line)
-                if 1 <= n <= total_pages:
-                    return n, band_name
-
-    return None, "—"
+    cw = r.width  / GRID_COLS
+    ch = r.height / GRID_ROWS
+    return fitz.Rect(col * cw, row * ch, (col + 1) * cw, (row + 1) * ch)
 
 
-def render_thumbnail(page, width=380):
-    r = page.rect
-    ph, pw = r.height, r.width
+def _read_cell(page, col, row):
+    """Return (raw_str, int_val) if the cell contains a standalone number, else (None, None)."""
+    rect = _cell_rect(page, col, row)
+    text = page.get_text("text", clip=rect).strip()
+    m = _NUM_RE.match(text)
+    if m:
+        return text, int(m.group(1).lstrip('0') or '0')
+    return None, None
+
+
+def _is_section_opener(page):
+    """Full-bleed image pages have almost no extractable text — skip silently."""
+    return len(page.get_text("text").strip()) < 40
+
+
+def _pad_width(raw):
+    """Return zero-pad width ('02' → 2) or 0 if not padded."""
+    return len(raw) if raw and len(raw) > 1 and raw[0] == '0' else 0
+
+
+def _fmt(n, pad):
+    return str(n).zfill(pad) if pad else str(n)
+
+
+def _describe_cell(col, row):
+    """Map grid position to a human-readable region name."""
+    h = "left"   if col < 3 else ("right" if col >= 7 else "center")
+    v = "top"    if row < GRID_ROWS // 2 else "bottom"
+    return f"{v}-{h} (grid {col},{row})"
+
+
+# ── Step 1: grid scan ────────────────────────────────────────────────────────
+
+def _detect_cell(doc, content_indices):
+    """
+    Scan first SCAN_PAGES non-opener content pages.
+    Returns ((col, row), hit_count) for the winning cell, or (None, 0).
+    """
+    hits = Counter()
+    scanned = 0
+
+    for idx in content_indices:
+        if scanned >= SCAN_PAGES:
+            break
+        page = doc[idx]
+        if _is_section_opener(page):
+            continue
+
+        for row in range(GRID_ROWS):
+            for col in range(GRID_COLS):
+                _, val = _read_cell(page, col, row)
+                if val is not None:
+                    hits[(col, row)] += 1
+        scanned += 1
+
+    if not hits:
+        return None, 0
+
+    best = max(hits, key=hits.get)
+    return best, hits[best]
+
+
+# ── Step 3 thumbnail ─────────────────────────────────────────────────────────
+
+def _render_preview(page, col, row, width=520):
+    """
+    Render the band that contains the detected cell (top or bottom of page)
+    at high resolution, with a red box around the exact cell.
+    Returns base64 PNG or None.
+    """
+    r  = page.rect
+    pw, ph = r.width, r.height
     scale = width / pw
-    mat = fitz.Matrix(scale, scale)
-    try:
-        ph_pix = page.get_pixmap(matrix=mat, clip=fitz.Rect(0, 0, pw, ph * 0.15),  colorspace=fitz.csRGB)
-        pf_pix = page.get_pixmap(matrix=mat, clip=fitz.Rect(0, ph * 0.85, pw, ph), colorspace=fitz.csRGB)
-        w = ph_pix.width
-        h = ph_pix.height + 2 + pf_pix.height
-        out = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, w, h), False)
-        out.copy(ph_pix, fitz.IRect(0, 0, w, ph_pix.height))
-        out.set_rect(fitz.IRect(0, ph_pix.height, w, ph_pix.height + 2), (210, 210, 210))
-        out.copy(pf_pix, fitz.IRect(0, ph_pix.height + 2, w, h))
-        return base64.b64encode(out.tobytes("png")).decode()
-    except Exception:
-        try:
-            pix = page.get_pixmap(matrix=mat, clip=fitz.Rect(0, ph * 0.85, pw, ph), colorspace=fitz.csRGB)
-            return base64.b64encode(pix.tobytes("png")).decode()
-        except Exception:
-            return None
+    mat   = fitz.Matrix(scale, scale)
 
+    # Show ~top 12% or ~bottom 12% depending on which half the cell lives in
+    if row < GRID_ROWS // 2:
+        clip = fitz.Rect(0, 0, pw, ph * 0.12)
+    else:
+        clip = fitz.Rect(0, ph * 0.88, pw, ph)
+
+    cell_rect = _cell_rect(page, col, row)
+    annot = None
+    try:
+        annot = page.add_rect_annot(cell_rect.inflate(2))
+        annot.set_colors(stroke=(0.85, 0.1, 0.1))
+        annot.set_border(width=2)
+        annot.update()
+        pix = page.get_pixmap(matrix=mat, clip=clip,
+                               colorspace=fitz.csRGB, annots=True)
+        return base64.b64encode(pix.tobytes("png")).decode()
+    except Exception:
+        return None
+    finally:
+        if annot:
+            try:
+                page.delete_annot(annot)
+            except Exception:
+                pass
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────
 
 def check_page_numbers(pdf_path):
     doc   = fitz.open(pdf_path)
     total = doc.page_count
-    skipped = 0
+
+    # Fixed structure: skip title (0), TOC (1), back cover (last)
+    content_indices = list(range(2, total - 1))
+
+    # ── Step 1: find which grid cell consistently holds the page number ──────
+    best_cell, confidence = _detect_cell(doc, content_indices)
+
+    if not best_cell or confidence < MIN_HITS:
+        doc.close()
+        return {
+            "passed":          False,
+            "total_pages":     total,
+            "content_pages":   len(content_indices),
+            "region_detected": "not detected",
+            "issue_count":     1,
+            "rows": [{
+                "status":   "error",
+                "pdf_page": "—",
+                "found":    "—",
+                "region":   "—",
+                "note":     "Could not detect page number location — "
+                            "no cell consistently held a standalone number.",
+                "img":      None,
+            }],
+        }
+
+    col, row      = best_cell
+    region_label  = _describe_cell(col, row)
+
+    # ── Step 2: extract number from every content page ───────────────────────
     page_data = []
+    pad = 0
 
-    for i, page in enumerate(doc):
-        if i == 0 or i == total - 1 or is_toc_page(page):
-            skipped += 1
-            continue
-        found, location = extract_page_number(page, total)
-        page_data.append({"index": i, "pdf_page": i + 1,
-                           "found": found, "location": location})
+    for i in content_indices:
+        page   = doc[i]
+        opener = _is_section_opener(page)
 
-    found_list   = [p["found"] for p in page_data if p["found"] is not None]
-    none_count   = sum(1 for p in page_data if p["found"] is None)
-    counts       = Counter(found_list)
-    duplicates   = {n for n, c in counts.items() if c > 1}
+        raw, val = None, None
+        if not opener:
+            raw, val = _read_cell(page, col, row)
+            if val is not None and pad == 0:
+                pad = _pad_width(raw)
 
-    seq_min = min(found_list) if found_list else 0
-    seq_max = max(found_list) if found_list else 0
-    all_gaps = sorted(set(range(seq_min, seq_max + 1)) - set(found_list))
-
-    # Only report gaps that exceed what extraction failures can explain.
-    # If we have 3 gaps but 2 pages returned None, only 1 gap is definitely real.
-    real_gaps = all_gaps[none_count:]   # gaps not accountable by None pages
-
-    rows = []
-    first_seen = {}
-
-    for entry in page_data:
-        n = entry["found"]
-        if n is None:
-            continue
-        if n in duplicates:
-            if n not in first_seen:
-                first_seen[n] = entry["pdf_page"]
-            else:
-                thumb = render_thumbnail(doc[entry["index"]])
-                rows.append({
-                    "status":    "duplicate",
-                    "pdf_page":  entry["pdf_page"],
-                    "found":     n,
-                    "location":  entry["location"],
-                    "note":      f"Number {n} already used on p.{first_seen[n]}",
-                    "thumbnail": thumb,
-                })
-        else:
-            first_seen[n] = entry["pdf_page"]
-
-    for n in real_gaps:
-        rows.append({
-            "status":    "missing",
-            "pdf_page":  "—",
-            "found":     "—",
-            "location":  "—",
-            "note":      f"Page number {n} never appears in the document",
-            "thumbnail": None,
+        page_data.append({
+            "index":    i,
+            "pdf_page": i + 1,
+            "raw":      raw,
+            "val":      val,
+            "opener":   opener,
         })
 
+    # ── Step 3: sequence validation ──────────────────────────────────────────
+    numbered      = [p for p in page_data if p["val"] is not None]
+    unknown_count = sum(1 for p in page_data
+                        if not p["opener"] and p["val"] is None)
+    values        = [p["val"] for p in numbered]
+
+    rows      = []
+    first_seen = {}
+
+    # Duplicates
+    for p in numbered:
+        n = p["val"]
+        if n in first_seen:
+            img = _render_preview(doc[p["index"]], col, row)
+            rows.append({
+                "status":   "duplicate",
+                "pdf_page": p["pdf_page"],
+                "found":    p["raw"],
+                "region":   region_label,
+                "note":     f"Number {p['raw']} already used on p.{first_seen[n]}",
+                "img":      img,
+            })
+        else:
+            first_seen[n] = p["pdf_page"]
+
+    # Gaps (subtract pages where extraction returned nothing, to suppress false positives)
+    if values:
+        seq_min, seq_max = min(values), max(values)
+        all_gaps  = sorted(set(range(seq_min, seq_max + 1)) - set(values))
+        real_gaps = all_gaps[unknown_count:]
+        for n in real_gaps:
+            rows.append({
+                "status":   "skipped",
+                "pdf_page": "—",
+                "found":    "—",
+                "region":   region_label,
+                "note":     f"Page number {_fmt(n, pad)} is missing from the sequence",
+                "img":      None,
+            })
+
     doc.close()
+
     return {
-        "passed":        len(rows) == 0,
-        "total_pages":   total,
-        "skipped_pages": skipped,
-        "checked_pages": len(page_data),
-        "issue_count":   len(rows),
-        "rows":          rows,
+        "passed":          len(rows) == 0,
+        "total_pages":     total,
+        "content_pages":   len(content_indices),
+        "region_detected": region_label,
+        "confidence":      f"{confidence}/{min(SCAN_PAGES, len(content_indices))} pages",
+        "issue_count":     len(rows),
+        "rows":            rows,
     }
